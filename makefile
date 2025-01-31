@@ -6,7 +6,7 @@ CURL := curl -s
 YAML_URL := https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo.yaml
 BASE_DIR := base
 OVERLAY_DIR := overlays
-NUM_REPLICAS := 4  
+NUM_REPLICAS := 250
 CONFIG_DIR_NAME := load-test-manifests
 
 
@@ -77,7 +77,7 @@ define K6_TASK_TEMPLATE
 apiVersion: k6.io/v1alpha1
 kind: TestRun
 metadata:
-  name: bookinfo-productpage-load-test
+  name: bookinfo-productpage-[]-load-test
 spec:
   parallelism: 100  #This number determines the number of pods in which the virtual users will be split
   script:
@@ -96,14 +96,14 @@ export K6_TASK_TEMPLATE
 
 install: $(BASE_DIR)/bookinfo.yaml $(BASE_DIR)/kustomization.yaml $(OVERLAY_DIR) $(CONFIG_DIR_NAME) $(CONFIG_DIR_NAME)/k6-task-%.yaml
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		echo "Installing replica $$(printf "%03d" $$i) of the application"; \
+		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Installing replica $$(printf "%03d" $$i) of the application"; \
 		$(KUSTOMIZE) $(OVERLAY_DIR)/overlay-$$(printf "%03d" $$i) | $(APPLY) 2>&1 > /dev/null; \
 		kubectl create configmap k6-test-config-$$(printf "%03d" $$i) --from-file=$(CONFIG_DIR_NAME)/k6-test-$$(printf "%03d" $$i).js 2>&1 > /dev/null; \
 	done
-	@echo "Sleeping 60 seconds before initiating load tests"
+	@echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Sleeping 60 seconds before initiating load tests"
 	@sleep 60
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		echo "Initiating load test for application $$(printf "%03d" $$i)"; \
+		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Initiating load test for application $$(printf "%03d" $$i)"; \
 		kubectl apply -f $(CONFIG_DIR_NAME)/k6-task-$$(printf "%03d" $$i).yaml 2>&1 > /dev/null; \
 	done
 
@@ -141,7 +141,10 @@ $(CONFIG_DIR_NAME)/k6-task-%.yaml:
 
 clean:
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		$(KUSTOMIZE) $(OVERLAY_DIR)/overlay-$$(printf "%03d" $$i) | kubectl delete -f -; \
-		kubectl delete configmap k6-test-config-$$(printf "%03d" $$i); \
+		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Deleting replica $$(printf "%03d" $$i) of the application"; \
+		$(KUSTOMIZE) $(OVERLAY_DIR)/overlay-$$(printf "%03d" $$i) | kubectl delete -f - 2>&1 > /dev/null; \
+		kubectl delete configmap k6-test-config-$$(printf "%03d" $$i) 2>&1 > /dev/null; \
+		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Deleting load test for application $$(printf "%03d" $$i)"; \
+		kubectl delete -f $(CONFIG_DIR_NAME)/k6-task-$$(printf "%03d" $$i).yaml 2>&1 > /dev/null; \
 	done
 	@rm -rf $(BASE_DIR) $(OVERLAY_DIR) $(CONFIG_DIR_NAME)
