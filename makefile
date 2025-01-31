@@ -6,10 +6,13 @@ CURL := curl -s
 YAML_URL := https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo.yaml
 BASE_DIR := base
 OVERLAY_DIR := overlays
-NUM_REPLICAS := 250
+NUM_REPLICAS := 200
 CONFIG_DIR_NAME := load-test-manifests
 
 
+define log
+echo "$$(date "+%Y-%m-%d %H:%M:%S %Z") $(1)"
+endef
 
 
 # K6 TEST TEMPLATE
@@ -30,10 +33,10 @@ export const options = {
       executor: 'ramping-vus',
       startVUs: 0,
       stages: [
-        { duration: '2m', target: 5000 },  // Ramp-up to 50000 Virtual users (VUs) over 2 minutes
-        { duration: '5m', target: 10000 }, // Ramp-up to 100000 VUs over next 5 minutes
-        { duration: '10m', target: 10000 }, // Stay at 100000 VUs for 10 minutes
-        { duration: '3m', target: 0 },     // Ramp-down to 0 VUs over 3 minutes
+        { duration: '20m', target: 5000 },  // Ramp-up to 50000 Virtual users (VUs) over 2 minutes
+        { duration: '45m', target: 10000 }, // Ramp-up to 100000 VUs over next 5 minutes
+        { duration: '72h', target: 10000 }, // Stay at 100000 VUs for 10 minutes
+        { duration: '45m', target: 0 },     // Ramp-down to 0 VUs over 3 minutes
       ],
       gracefulRampDown: '2m',
     },
@@ -79,11 +82,17 @@ kind: TestRun
 metadata:
   name: bookinfo-productpage-[]-load-test
 spec:
-  parallelism: 100  #This number determines the number of pods in which the virtual users will be split
+  parallelism: 2  #This number determines the number of pods in which the virtual users will be split
   script:
     configMap:
       name: k6-test-config-[]
       file: k6-test-[].js
+  runner:
+    env:
+      - name: K6_WEB_DASHBOARD
+        value: "true"
+      - name: K6_WEB_DASHBOARD_EXPORT
+        value: "html-report.html"
 endef
 export K6_TASK_TEMPLATE
 
@@ -96,16 +105,20 @@ export K6_TASK_TEMPLATE
 
 install: $(BASE_DIR)/bookinfo.yaml $(BASE_DIR)/kustomization.yaml $(OVERLAY_DIR) $(CONFIG_DIR_NAME) $(CONFIG_DIR_NAME)/k6-task-%.yaml
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Installing replica $$(printf "%03d" $$i) of the application"; \
+		$(call log, :: Installing replica $$(printf "%03d" $$i) of the application); \
 		$(KUSTOMIZE) $(OVERLAY_DIR)/overlay-$$(printf "%03d" $$i) | $(APPLY) 2>&1 > /dev/null; \
 		kubectl create configmap k6-test-config-$$(printf "%03d" $$i) --from-file=$(CONFIG_DIR_NAME)/k6-test-$$(printf "%03d" $$i).js 2>&1 > /dev/null; \
 	done
-	@echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Sleeping 60 seconds before initiating load tests"
+	@$(call log, :: Sleeping 60 seconds before initiating load tests)
 	@sleep 60
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Initiating load test for application $$(printf "%03d" $$i)"; \
+		$(call log, :: Initiating load test for application $$(printf "%03d" $$i)); \
 		kubectl apply -f $(CONFIG_DIR_NAME)/k6-task-$$(printf "%03d" $$i).yaml 2>&1 > /dev/null; \
 	done
+	@echo "========================================================"
+	@echo " To access the dashboard, port forward to each pod using"
+	@echo " kubectl port-forward pod/<pod_name> 5665"
+	@echo "========================================================"
 
 $(BASE_DIR)/bookinfo.yaml:
 	@mkdir -p $(BASE_DIR)
@@ -141,10 +154,10 @@ $(CONFIG_DIR_NAME)/k6-task-%.yaml:
 
 clean:
 	@for i in $$(seq 1 $(NUM_REPLICAS)); do \
-		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Deleting replica $$(printf "%03d" $$i) of the application"; \
+		$(call log, :: Deleting replica $$(printf "%03d" $$i) of the application); \
 		$(KUSTOMIZE) $(OVERLAY_DIR)/overlay-$$(printf "%03d" $$i) | kubectl delete -f - 2>&1 > /dev/null; \
 		kubectl delete configmap k6-test-config-$$(printf "%03d" $$i) 2>&1 > /dev/null; \
-		echo "$(shell date "+%Y-%m-%d %H:%M:%S %Z") :: Deleting load test for application $$(printf "%03d" $$i)"; \
+		$(call log, :: Deleting load test for application $$(printf "%03d" $$i)); \
 		kubectl delete -f $(CONFIG_DIR_NAME)/k6-task-$$(printf "%03d" $$i).yaml 2>&1 > /dev/null; \
 	done
 	@rm -rf $(BASE_DIR) $(OVERLAY_DIR) $(CONFIG_DIR_NAME)
